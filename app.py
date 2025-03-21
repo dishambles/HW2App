@@ -4,13 +4,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta  # Fixed import for date
 import re
 import base64
 import io
 import json
-from urllib.parse import unquote
-import matplotlib.dates as mdates
+from urllib.parse import unquote, quote
+from dateutil.relativedelta import relativedelta
 
 # Set page configuration with Glimpse-inspired styling
 st.set_page_config(
@@ -132,6 +132,16 @@ st.markdown("""
         margin-right: 10px;
         font-weight: 500;
     }
+    
+    /* Search results */
+    .search-result {
+        padding: 10px;
+        border-radius: 5px;
+        transition: all 0.2s ease;
+    }
+    .search-result:hover {
+        background-color: #f0f0f0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -147,6 +157,27 @@ def extract_page_title(url):
         return unquote(match.group(1))
     else:
         return None
+
+def search_wikipedia_topics(query, limit=5):
+    """Search for Wikipedia topics using the Wikipedia API"""
+    if not query or len(query.strip()) < 2:
+        return []
+        
+    url = f"https://en.wikipedia.org/w/api.php?action=opensearch&search={quote(query)}&limit={limit}&namespace=0&format=json"
+    
+    try:
+        response = requests.get(url, headers={'User-Agent': 'WikiInterestComparisonTool/1.0'})
+        
+        if response.status_code == 200:
+            data = response.json()
+            # The API returns data in the format [query, [titles], [descriptions], [urls]]
+            if len(data) >= 2:
+                return data[1]  # Return the list of titles
+        
+        return []
+    except Exception as e:
+        st.error(f"Error searching Wikipedia: {e}")
+        return []
 
 def fetch_pageviews(page_title, start_date, end_date, project='en.wikipedia.org'):
     """Fetch page view data from the Wikimedia API"""
@@ -238,31 +269,66 @@ with st.sidebar:
     # Create URL input fields based on the number of topics
     urls = []
     for i in range(num_topics):
+        st.subheader(f"Topic {i+1}")
+        
+        # Default search terms
+        default_search = ""
         if i == 0:
-            default_url = "https://en.wikipedia.org/wiki/Python_(programming_language)"
+            default_search = "Python programming language"
         elif i == 1:
-            default_url = "https://en.wikipedia.org/wiki/JavaScript"
-        else:
-            default_url = ""
+            default_search = "JavaScript"
             
-        url = st.text_input(
-            f"Wikipedia URL {i+1}",
-            value=default_url,
-            help="Enter the full URL of a Wikipedia page"
+        # Search box for Wikipedia topics
+        search_query = st.text_input(
+            f"Search Wikipedia topics {i+1}",
+            value=default_search,
+            key=f"search_{i}"
         )
-        urls.append(url)
+        
+        # Search for matching topics
+        matching_topics = []
+        if search_query:
+            matching_topics = search_wikipedia_topics(search_query)
+        
+        # Display dropdown for topic selection if results found
+        selected_topic = None
+        if matching_topics:
+            selected_topic = st.selectbox(
+                f"Select a topic {i+1}",
+                options=matching_topics,
+                key=f"topic_{i}"
+            )
+            
+            # Convert selected topic to Wikipedia URL
+            if selected_topic:
+                wiki_url = f"https://en.wikipedia.org/wiki/{quote(selected_topic.replace(' ', '_'))}"
+                st.success(f"Using: {wiki_url}")
+                urls.append(wiki_url)
+        else:
+            # Fallback to direct URL input if no search results or no search query
+            if search_query:
+                st.info("No matching topics found. Enter a URL directly.")
+                
+            direct_url = st.text_input(
+                f"Or enter Wikipedia URL directly {i+1}",
+                value="" if search_query and not matching_topics else ("https://en.wikipedia.org/wiki/Python_(programming_language)" if i == 0 else 
+                      "https://en.wikipedia.org/wiki/JavaScript" if i == 1 else ""),
+                key=f"url_{i}"
+            )
+            if direct_url:
+                urls.append(direct_url)
     
     # Date range selection
     st.subheader("Date Range")
-    end_date = datetime.now()
+    end_date_val = datetime.now()
     
     # Predefined date ranges
     date_range_options = {
-        "Last 7 days": end_date - timedelta(days=7),
-        "Last 30 days": end_date - timedelta(days=30),
-        "Last 90 days": end_date - timedelta(days=90),
-        "Last 6 months": end_date - timedelta(days=180),
-        "Last year": end_date - timedelta(days=365),
+        "Last 7 days": end_date_val - timedelta(days=7),
+        "Last 30 days": end_date_val - timedelta(days=30),
+        "Last 90 days": end_date_val - timedelta(days=90),
+        "Last 6 months": end_date_val - timedelta(days=180),
+        "Last year": end_date_val - timedelta(days=365),
         "Custom": None
     }
     
@@ -270,30 +336,31 @@ with st.sidebar:
     
     if selected_range == "Custom":
         # Custom date range
-        min_date = datetime(2015, 7, 1)  # Wikimedia pageview API data starts from July 2015
+        min_date_val = datetime(2015, 7, 1)  # Wikimedia pageview API data starts from July 2015
         
         start_date = st.date_input(
             "Start Date",
-            value=end_date - timedelta(days=30),
-            min_value=min_date,
-            max_value=end_date
+            value=end_date_val - timedelta(days=30),
+            min_value=min_date_val,
+            max_value=end_date_val
         )
         
         end_date = st.date_input(
             "End Date",
-            value=end_date,
-            min_value=min_date,
+            value=end_date_val,
+            min_value=min_date_val,
             max_value=datetime.now()
         )
     else:
-        start_date = date_range_options[selected_range]
+        start_date = date_range_options[selected_range].date()  # Fixed for date object
+        end_date = end_date_val.date()  # Fixed for date object
         # Display the selected dates for reference
         st.info(f"From: {start_date.strftime('%Y-%m-%d')} To: {end_date.strftime('%Y-%m-%d')}")
     
-    # Convert to datetime objects
-    if isinstance(start_date, datetime.date):
+    # Convert to datetime objects - Fixed for date object check
+    if isinstance(start_date, date):
         start_date = datetime.combine(start_date, datetime.min.time())
-    if isinstance(end_date, datetime.date):
+    if isinstance(end_date, date):
         end_date = datetime.combine(end_date, datetime.min.time())
     
     # Display options
@@ -414,7 +481,7 @@ if analyze_button:
                     plt.xlabel('Date', fontsize=12)
                     
                     # Format x-axis dates
-                    date_format = mdates.DateFormatter('%b %d, %Y')
+                    date_format = plt.matplotlib.dates.DateFormatter('%b %d, %Y')
                     ax.xaxis.set_major_formatter(date_format)
                     fig.autofmt_xdate()
                     
@@ -595,7 +662,7 @@ else:
         - Explore related topics for further research
         
         ### Getting Started:
-        1. Enter Wikipedia URLs in the sidebar
+        1. Search for Wikipedia topics in the sidebar
         2. Select your desired date range
         3. Click "Analyze Trends" to begin
         """)
